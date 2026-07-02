@@ -1,0 +1,344 @@
+// ===========================================================================
+// DISTRIBUTED JOB SCHEDULER - DATABASE SCHEMA
+// ===========================================================================
+// Design Decisions:
+// 1. Normalized schema to prevent data anomalies and support complex queries
+// 2. UUID primary keys for distributed-friendly ID generation
+// 3. Composite indexes on hot paths (job claiming, queue polling)
+// 4. Soft deletes via timestamps rather than hard deletes
+// 5. Separate execution log table for audit trail without bloating jobs table
+// 6. Worker heartbeat table separated from workers for high-frequency updates
+// 7. Dead letter queue as a first-class entity for operational visibility
+// ===========================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ===========================================================================
+// USERS - Authentication and ownership
+// ===========================================================================
+// Design: Users own projects. Multi-tenant isolation at the project level.
+// We store bcrypt hashes, never plain passwords.
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String   // bcrypt hash
+  name      String
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  projects Project[]
+
+  @@map("users")
+}
+
+// ===========================================================================
+// PROJECTS - Logical grouping for multi-tenant isolation
+// ===========================================================================
+// Design: Projects are the top-level organizational unit.
+// All queues, jobs, and workers belong to a project.
+// This enables per-project rate limiting, billing, and access control.
+
+model Project {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  userId      String   @map("user_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  queues  Queue[]
+  workers Worker[]
+
+  @@index([userId])
+  @@map("projects")
+}
+
+// ===========================================================================
+// RETRY POLICIES - Configurable retry behavior
+// ===========================================================================
+// Design: Extracted as a separate entity so multiple queues can share policies.
+// Supports three strategies: FIXED, LINEAR, EXPONENTIAL.
+// maxRetries caps total attempts; baseDelay and maxDelay bound timing.
+
+enum RetryStrategy {
+  FIXED
+  LINEAR
+  EXPONENTIAL
+}
+
+model RetryPolicy {
+  id          String        @id @default(uuid())
+  name        String
+  strategy    RetryStrategy @default(EXPONENTIAL)
+  maxRetries  Int           @default(3) @map("max_retries")
+  baseDelay   Int           @default(1000) @map("base_delay") // milliseconds
+  maxDelay    Int           @default(300000) @map("max_delay") // 5 minutes max
+  createdAt   DateTime      @default(now()) @map("created_at")
+
+  queues Queue[]
+
+  @@map("retry_policies")
+}
+
+// ===========================================================================
+// QUEUES - Named job channels with configuration
+// ===========================================================================
+// Design: Queues are the primary routing mechanism for jobs.
+// Each queue has its own priority, concurrency limits, and retry policy.
+// Pausing a queue prevents workers from claiming new jobs from it.
+
+enum QueueStatus {
+  ACTIVE
+  PAUSED
+  DRAINING // No new jobs accepted, existing jobs finish
+}
+
+model Queue {
+  id             String      @id @default(uuid())
+  name           String
+  projectId      String      @map("project_id")
+  retryPolicyId  String?     @map("retry_policy_id")
+  priority       Int         @default(0) // Higher = more important
+  concurrency    Int         @default(5) // Max concurrent jobs
+  status         QueueStatus @default(ACTIVE)
+  description    String?
+  createdAt      DateTime    @default(now()) @map("created_at")
+  updatedAt      DateTime    @updatedAt @map("updated_at")
+
+  project     Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  retryPolicy RetryPolicy? @relation(fields: [retryPolicyId], references: [id], onDelete: SetNull)
+  jobs        Job[]
+
+  @@unique([projectId, name]) // Queue names unique within project
+  @@index([projectId, status])
+  @@index([priority])
+  @@map("queues")
+}
+
+// ===========================================================================
+// JOBS - The core work unit
+// ===========================================================================
+// Design: Jobs are the atomic unit of work in the system.
+// 
+// Key decisions:
+// - `claimedBy` tracks which worker owns the job (prevents double-execution)
+// - `scheduledFor` enables delayed/scheduled jobs
+// - `cronExpression` enables recurring jobs (parent spawns children)
+// - `batchId` groups related jobs for batch operations
+// - `idempotencyKey` prevents duplicate job creation
+// - `lockedUntil` implements distributed locking with TTL
+//
+// The composite index on (queueId, status, priority, scheduledFor) is the
+// critical "hot path" index for job claiming queries.
+
+enum JobStatus {
+  QUEUED
+  SCHEDULED
+  CLAIMED
+  RUNNING
+  COMPLETED
+  FAILED
+  RETRYING
+  DEAD
+}
+
+enum JobType {
+  IMMEDIATE
+  DELAYED
+  SCHEDULED
+  RECURRING
+  BATCH
+}
+
+model Job {
+  id              String    @id @default(uuid())
+  queueId         String    @map("queue_id")
+  name            String
+  type            JobType   @default(IMMEDIATE)
+  payload         Json      @default("{}")
+  status          JobStatus @default(QUEUED)
+  priority        Int       @default(0)
+  attempts        Int       @default(0)
+  maxAttempts     Int       @default(3) @map("max_attempts")
+  scheduledFor    DateTime? @map("scheduled_for")
+  cronExpression  String?   @map("cron_expression")
+  batchId         String?   @map("batch_id")
+  idempotencyKey  String?   @unique @map("idempotency_key")
+  claimedBy       String?   @map("claimed_by") // worker ID
+  lockedUntil     DateTime? @map("locked_until")
+  startedAt       DateTime? @map("started_at")
+  completedAt     DateTime? @map("completed_at")
+  failedAt        DateTime? @map("failed_at")
+  result          Json?
+  error           String?
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  queue      Queue          @relation(fields: [queueId], references: [id], onDelete: Cascade)
+  executions JobExecution[]
+  logs       JobLog[]
+  dlqEntry   DeadLetterQueue?
+
+  // Critical index for job claiming: workers query by queue, status, priority, and schedule
+  @@index([queueId, status, priority, scheduledFor])
+  @@index([status])
+  @@index([batchId])
+  @@index([claimedBy])
+  @@index([scheduledFor])
+  @@index([type, status])
+  @@map("jobs")
+}
+
+// ===========================================================================
+// JOB EXECUTIONS - Immutable audit trail of every attempt
+// ===========================================================================
+// Design: Every time a job runs (including retries), we create an execution record.
+// This provides a complete audit trail without modifying the job record.
+// Useful for debugging, SLA tracking, and understanding failure patterns.
+
+enum ExecutionStatus {
+  STARTED
+  COMPLETED
+  FAILED
+  TIMEOUT
+}
+
+model JobExecution {
+  id          String          @id @default(uuid())
+  jobId       String          @map("job_id")
+  workerId    String          @map("worker_id")
+  attempt     Int
+  status      ExecutionStatus @default(STARTED)
+  startedAt   DateTime        @default(now()) @map("started_at")
+  completedAt DateTime?       @map("completed_at")
+  duration    Int?            // milliseconds
+  error       String?
+  result      Json?
+
+  job Job @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId, attempt])
+  @@index([workerId])
+  @@index([startedAt])
+  @@map("job_executions")
+}
+
+// ===========================================================================
+// JOB LOGS - Structured logging per job
+// ===========================================================================
+// Design: Separate from executions for granular logging during execution.
+// Workers can emit multiple log entries during a single execution.
+
+enum LogLevel {
+  DEBUG
+  INFO
+  WARN
+  ERROR
+}
+
+model JobLog {
+  id        String   @id @default(uuid())
+  jobId     String   @map("job_id")
+  level     LogLevel @default(INFO)
+  message   String
+  metadata  Json?
+  timestamp DateTime @default(now())
+
+  job Job @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId, timestamp])
+  @@index([level])
+  @@map("job_logs")
+}
+
+// ===========================================================================
+// WORKERS - Registered worker instances
+// ===========================================================================
+// Design: Workers register themselves on startup and deregister on shutdown.
+// Status tracking enables dashboard visibility and stale worker detection.
+// Workers that miss heartbeats are marked STALE, then OFFLINE.
+
+enum WorkerStatus {
+  ONLINE
+  BUSY
+  IDLE
+  STALE
+  OFFLINE
+}
+
+model Worker {
+  id             String       @id @default(uuid())
+  projectId      String       @map("project_id")
+  name           String
+  status         WorkerStatus @default(ONLINE)
+  hostname       String?
+  pid            Int?
+  concurrency    Int          @default(5)
+  currentLoad    Int          @default(0) @map("current_load")
+  totalProcessed Int          @default(0) @map("total_processed")
+  totalFailed    Int          @default(0) @map("total_failed")
+  lastHeartbeat  DateTime?    @map("last_heartbeat")
+  startedAt      DateTime     @default(now()) @map("started_at")
+  stoppedAt      DateTime?    @map("stopped_at")
+
+  project    Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  heartbeats WorkerHeartbeat[]
+
+  @@index([projectId, status])
+  @@index([lastHeartbeat])
+  @@map("workers")
+}
+
+// ===========================================================================
+// WORKER HEARTBEATS - High-frequency liveness signals
+// ===========================================================================
+// Design: Separated from workers table to avoid write amplification.
+// Heartbeats are append-only; old records can be pruned periodically.
+// This table will be the highest-write-volume table in the system.
+
+model WorkerHeartbeat {
+  id        String   @id @default(uuid())
+  workerId  String   @map("worker_id")
+  timestamp DateTime @default(now())
+  load      Int      @default(0) // Current jobs being processed
+  memory    Float?   // Memory usage in MB
+  cpu       Float?   // CPU usage percentage
+
+  worker Worker @relation(fields: [workerId], references: [id], onDelete: Cascade)
+
+  @@index([workerId, timestamp])
+  @@map("worker_heartbeats")
+}
+
+// ===========================================================================
+// DEAD LETTER QUEUE - Permanently failed jobs
+// ===========================================================================
+// Design: Jobs that exhaust all retries land here for human review.
+// One-to-one with Job (a job can only be dead-lettered once).
+// Stores the final error and all context needed for manual retry/investigation.
+
+model DeadLetterQueue {
+  id          String   @id @default(uuid())
+  jobId       String   @unique @map("job_id")
+  reason      String
+  failedAt    DateTime @default(now()) @map("failed_at")
+  attempts    Int
+  lastError   String?  @map("last_error")
+  resolvedAt  DateTime? @map("resolved_at")
+  resolvedBy  String?   @map("resolved_by")
+
+  job Job @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([failedAt])
+  @@index([resolvedAt])
+  @@map("dead_letter_queue")
+}
