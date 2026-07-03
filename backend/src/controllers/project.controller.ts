@@ -13,7 +13,8 @@ export class ProjectController {
 
   findAll = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     const pagination = extractPagination(req);
-    const result = await this.projectService.findAll(req.user!.id, pagination);
+    const organizationId = String(req.query.organizationId);
+    const result = await this.projectService.findAll(req.user!.id, organizationId, pagination);
     res.status(200).json({ success: true, ...result });
   };
 

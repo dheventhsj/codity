@@ -1,8 +1,13 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { apiClient, getToken } from '@/lib/api';
-import StatusBadge from '@/components/StatusBadge';
+import { Header } from '@/components/layout/header';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
+import { TableSkeleton } from '@/components/ui/skeleton';
+import { apiClient } from '@/lib/api';
+import { useAppStore } from '@/stores/app-store';
 
 interface Queue {
   id: string;
@@ -10,148 +15,87 @@ interface Queue {
   status: string;
   priority: number;
   concurrency: number;
-  description: string | null;
   _count?: { jobs: number };
 }
 
 export default function QueuesPage() {
+  const { token, project } = useAppStore();
   const [queues, setQueues] = useState<Queue[]>([]);
   const [loading, setLoading] = useState(true);
-  const [showForm, setShowForm] = useState(false);
   const [name, setName] = useState('');
-  const [priority, setPriority] = useState(0);
-  const [concurrency, setConcurrency] = useState(5);
 
   const fetchQueues = async () => {
-    try {
-      const token = getToken();
-      const projectId = localStorage.getItem('codity_project_id');
-      if (!projectId) { setLoading(false); return; }
-
-      const res = await apiClient<Queue[]>(`/queues?projectId=${projectId}`, { token: token || '' });
-      if (res.data) setQueues(res.data as unknown as Queue[]);
-    } catch {
-      // Handle error
-    } finally {
-      setLoading(false);
-    }
+    if (!token || !project) { setLoading(false); return; }
+    const res = await apiClient<Queue[]>(`/queues?projectId=${project.id}`, { token });
+    const list = (res as { data: Queue[] }).data ?? [];
+    setQueues(Array.isArray(list) ? list : []);
+    setLoading(false);
   };
 
-  useEffect(() => { fetchQueues(); }, []);
+  useEffect(() => { fetchQueues(); }, [token, project]);
 
-  const handleCreate = async (e: React.FormEvent) => {
+  const createQueue = async (e: React.FormEvent) => {
     e.preventDefault();
-    try {
-      const token = getToken();
-      const projectId = localStorage.getItem('codity_project_id');
-      await apiClient('/queues', {
-        method: 'POST',
-        body: { name, projectId, priority, concurrency },
-        token: token || '',
-      });
-      setName('');
-      setPriority(0);
-      setConcurrency(5);
-      setShowForm(false);
-      fetchQueues();
-    } catch {
-      // Handle error
-    }
-  };
-
-  const togglePause = async (queueId: string, currentStatus: string) => {
-    const token = getToken();
-    const action = currentStatus === 'ACTIVE' ? 'pause' : 'resume';
-    await apiClient(`/queues/${queueId}/${action}`, { method: 'POST', token: token || '' });
+    await apiClient('/queues', {
+      method: 'POST',
+      body: { name, projectId: project!.id },
+      token,
+    });
+    setName('');
     fetchQueues();
   };
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600" />
-      </div>
-    );
-  }
+  const toggle = async (id: string, status: string) => {
+    await apiClient(`/queues/${id}/${status === 'ACTIVE' ? 'pause' : 'resume'}`, {
+      method: 'PATCH',
+      token,
+    });
+    fetchQueues();
+  };
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-8">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Queues</h1>
-          <p className="text-gray-500 mt-1">Manage job queues and their configurations</p>
-        </div>
-        <button
-          onClick={() => setShowForm(!showForm)}
-          className="bg-primary-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-primary-700 transition"
-        >
-          New Queue
-        </button>
-      </div>
-
-      {showForm && (
-        <form onSubmit={handleCreate} className="bg-white rounded-xl border border-gray-200 p-6 mb-6">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
-              <input type="text" value={name} onChange={(e) => setName(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 outline-none" required />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Priority</label>
-              <input type="number" value={priority} onChange={(e) => setPriority(+e.target.value)} min={0} max={100} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 outline-none" />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Concurrency</label>
-              <input type="number" value={concurrency} onChange={(e) => setConcurrency(+e.target.value)} min={1} max={100} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 outline-none" />
-            </div>
-          </div>
-          <div className="mt-4 flex gap-2">
-            <button type="submit" className="bg-primary-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-primary-700 transition">Create</button>
-            <button type="button" onClick={() => setShowForm(false)} className="px-4 py-2 rounded-lg font-medium text-gray-600 hover:bg-gray-100 transition">Cancel</button>
-          </div>
+    <>
+      <Header title="Queues" description="Configure job channels, priority, and concurrency" />
+      <main className="flex-1 overflow-y-auto p-6 space-y-4">
+        <form onSubmit={createQueue} className="flex gap-2">
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Queue name" required />
+          <Button type="submit">Create Queue</Button>
         </form>
-      )}
-
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-        <table className="w-full">
-          <thead className="bg-gray-50 border-b border-gray-200">
-            <tr>
-              <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Name</th>
-              <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Status</th>
-              <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Priority</th>
-              <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Concurrency</th>
-              <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Jobs</th>
-              <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-200">
-            {queues.map((queue) => (
-              <tr key={queue.id} className="hover:bg-gray-50">
-                <td className="px-6 py-4 text-sm font-medium text-gray-900">{queue.name}</td>
-                <td className="px-6 py-4"><StatusBadge status={queue.status} /></td>
-                <td className="px-6 py-4 text-sm text-gray-600">{queue.priority}</td>
-                <td className="px-6 py-4 text-sm text-gray-600">{queue.concurrency}</td>
-                <td className="px-6 py-4 text-sm text-gray-600">{queue._count?.jobs || 0}</td>
-                <td className="px-6 py-4">
-                  <button
-                    onClick={() => togglePause(queue.id, queue.status)}
-                    className="text-sm text-primary-600 hover:text-primary-700 font-medium"
-                  >
-                    {queue.status === 'ACTIVE' ? 'Pause' : 'Resume'}
-                  </button>
-                </td>
-              </tr>
-            ))}
-            {queues.length === 0 && (
-              <tr>
-                <td colSpan={6} className="px-6 py-12 text-center text-gray-500">
-                  No queues found. Select a project and create a queue.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>
+        {loading ? (
+          <TableSkeleton rows={5} />
+        ) : (
+          <div className="card-surface overflow-hidden">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-[#262626] text-left text-xs text-[#A1A1AA]">
+                  <th className="px-4 py-3">Name</th>
+                  <th className="px-4 py-3">Status</th>
+                  <th className="px-4 py-3">Priority</th>
+                  <th className="px-4 py-3">Concurrency</th>
+                  <th className="px-4 py-3">Jobs</th>
+                  <th className="px-4 py-3">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#262626]">
+                {queues.map((q) => (
+                  <tr key={q.id} className="hover:bg-[#121212]">
+                    <td className="px-4 py-3 font-medium">{q.name}</td>
+                    <td className="px-4 py-3"><Badge status={q.status} /></td>
+                    <td className="px-4 py-3">{q.priority}</td>
+                    <td className="px-4 py-3">{q.concurrency}</td>
+                    <td className="px-4 py-3">{q._count?.jobs ?? 0}</td>
+                    <td className="px-4 py-3">
+                      <Button size="sm" variant="ghost" onClick={() => toggle(q.id, q.status)}>
+                        {q.status === 'ACTIVE' ? 'Pause' : 'Resume'}
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </main>
+    </>
   );
 }

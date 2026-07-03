@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { AuthController } from '../controllers/auth.controller';
+import { authenticate } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { asyncHandler } from '../utils/asyncHandler';
 
@@ -9,6 +10,7 @@ const registerSchema = z.object({
     email: z.string().email('Invalid email format'),
     password: z.string().min(8, 'Password must be at least 8 characters'),
     name: z.string().min(1, 'Name is required').max(100),
+    organizationName: z.string().max(100).optional(),
   }),
 });
 
@@ -66,6 +68,7 @@ export function createAuthRoutes(controller: AuthController): Router {
    *       401: { description: Invalid credentials }
    */
   router.post('/login', validate(loginSchema), asyncHandler(controller.login));
+  router.get('/profile', authenticate, asyncHandler(controller.profile));
 
   return router;
 }

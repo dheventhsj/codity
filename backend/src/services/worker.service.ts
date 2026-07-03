@@ -1,5 +1,6 @@
 import { PrismaClient, WorkerStatus } from '@prisma/client';
 import { PaginationParams, buildPaginatedResponse, PaginatedResponse } from '../utils/pagination';
+import { ProjectService } from './project.service';
 
 export interface WorkerResponse {
   id: string;
@@ -18,20 +19,18 @@ export interface WorkerResponse {
 }
 
 export class WorkerService {
-  constructor(private readonly prisma: PrismaClient) {}
+  private readonly projectService: ProjectService;
+
+  constructor(private readonly prisma: PrismaClient) {
+    this.projectService = new ProjectService(prisma);
+  }
 
   async findAll(
     userId: string,
     projectId: string,
     pagination: PaginationParams
   ): Promise<PaginatedResponse<WorkerResponse>> {
-    const project = await this.prisma.project.findFirst({
-      where: { id: projectId, userId },
-    });
-
-    if (!project) {
-      return buildPaginatedResponse([], 0, pagination);
-    }
+    await this.projectService.assertProjectAccess(userId, projectId);
 
     const [workers, total] = await Promise.all([
       this.prisma.worker.findMany({
@@ -47,13 +46,7 @@ export class WorkerService {
   }
 
   async getStats(userId: string, projectId: string) {
-    const project = await this.prisma.project.findFirst({
-      where: { id: projectId, userId },
-    });
-
-    if (!project) {
-      return { online: 0, busy: 0, idle: 0, stale: 0, offline: 0 };
-    }
+    await this.projectService.assertProjectAccess(userId, projectId);
 
     const stats = await this.prisma.worker.groupBy({
       by: ['status'],

@@ -1,4 +1,5 @@
 import { PrismaClient } from '@prisma/client';
+import { ProjectService } from './project.service';
 
 export interface DashboardStats {
   jobs: {
@@ -26,9 +27,14 @@ export interface DashboardStats {
 }
 
 export class StatsService {
-  constructor(private readonly prisma: PrismaClient) {}
+  private readonly projectService: ProjectService;
+
+  constructor(private readonly prisma: PrismaClient) {
+    this.projectService = new ProjectService(prisma);
+  }
 
   async getDashboardStats(userId: string, projectId: string): Promise<DashboardStats> {
+    await this.projectService.assertProjectAccess(userId, projectId);
     const now = new Date();
     const last24h = new Date(now.getTime() - 24 * 60 * 60 * 1000);
     const lastHour = new Date(now.getTime() - 60 * 60 * 1000);
@@ -42,29 +48,29 @@ export class StatsService {
     ] = await Promise.all([
       this.prisma.job.groupBy({
         by: ['status'],
-        where: { queue: { project: { id: projectId, userId } } },
+        where: { queue: { projectId } },
         _count: { status: true },
       }),
       this.prisma.worker.groupBy({
         by: ['status'],
-        where: { project: { id: projectId, userId } },
+        where: { projectId },
         _count: { status: true },
       }),
       this.prisma.queue.groupBy({
         by: ['status'],
-        where: { project: { id: projectId, userId } },
+        where: { projectId },
         _count: { status: true },
       }),
       this.prisma.job.count({
         where: {
-          queue: { project: { id: projectId, userId } },
+          queue: { projectId },
           status: 'COMPLETED',
           completedAt: { gte: last24h },
         },
       }),
       this.prisma.job.count({
         where: {
-          queue: { project: { id: projectId, userId } },
+          queue: { projectId },
           status: 'COMPLETED',
           completedAt: { gte: lastHour },
         },

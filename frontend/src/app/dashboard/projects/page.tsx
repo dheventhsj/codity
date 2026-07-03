@@ -1,143 +1,91 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { apiClient, getToken } from '@/lib/api';
+import { Header } from '@/components/layout/header';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Card, CardContent } from '@/components/ui/card';
+import { TableSkeleton } from '@/components/ui/skeleton';
+import { apiClient } from '@/lib/api';
+import { useAppStore } from '@/stores/app-store';
 
 interface Project {
   id: string;
   name: string;
   description: string | null;
-  createdAt: string;
   _count?: { queues: number; workers: number };
 }
 
 export default function ProjectsPage() {
+  const { token, organization, setProject } = useAppStore();
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
 
   const fetchProjects = async () => {
-    try {
-      const token = getToken();
-      const res = await apiClient<Project[]>('/projects', { token: token || '' });
-      if (res.data) setProjects(res.data as unknown as Project[]);
-    } catch {
-      // Handle error silently
-    } finally {
-      setLoading(false);
-    }
+    if (!token || !organization) { setLoading(false); return; }
+    const res = await apiClient<Project[]>(
+      `/projects?organizationId=${organization.id}`,
+      { token }
+    );
+    const paginated = res as unknown as { data: Project[]; pagination?: unknown };
+    setProjects(Array.isArray(paginated.data) ? paginated.data : []);
+    setLoading(false);
   };
 
-  useEffect(() => { fetchProjects(); }, []);
+  useEffect(() => { fetchProjects(); }, [token, organization]);
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
-    try {
-      const token = getToken();
-      await apiClient('/projects', {
-        method: 'POST',
-        body: { name, description },
-        token: token || '',
-      });
-      setName('');
-      setDescription('');
-      setShowForm(false);
-      fetchProjects();
-    } catch {
-      // Handle error
-    }
+    await apiClient('/projects', {
+      method: 'POST',
+      body: { name, organizationId: organization!.id },
+      token,
+    });
+    setName('');
+    setShowForm(false);
+    fetchProjects();
   };
-
-  const selectProject = (projectId: string) => {
-    localStorage.setItem('codity_project_id', projectId);
-  };
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600" />
-      </div>
-    );
-  }
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-8">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Projects</h1>
-          <p className="text-gray-500 mt-1">Manage your job scheduling projects</p>
+    <>
+      <Header title="Projects" description="Organize queues, jobs, and workers" />
+      <main className="flex-1 overflow-y-auto p-6">
+        <div className="mb-4 flex justify-end">
+          <Button onClick={() => setShowForm(!showForm)}>New Project</Button>
         </div>
-        <button
-          onClick={() => setShowForm(!showForm)}
-          className="bg-primary-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-primary-700 transition"
-        >
-          New Project
-        </button>
-      </div>
-
-      {showForm && (
-        <form onSubmit={handleCreate} className="bg-white rounded-xl border border-gray-200 p-6 mb-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
-              <input
-                type="text"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none"
-                required
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
-              <input
-                type="text"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none"
-              />
-            </div>
-          </div>
-          <div className="mt-4 flex gap-2">
-            <button type="submit" className="bg-primary-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-primary-700 transition">
-              Create
-            </button>
-            <button type="button" onClick={() => setShowForm(false)} className="px-4 py-2 rounded-lg font-medium text-gray-600 hover:bg-gray-100 transition">
-              Cancel
-            </button>
-          </div>
-        </form>
-      )}
-
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {projects.map((project) => (
-          <div
-            key={project.id}
-            onClick={() => selectProject(project.id)}
-            className="bg-white rounded-xl border border-gray-200 p-6 hover:border-primary-300 hover:shadow-md transition cursor-pointer"
-          >
-            <h3 className="text-lg font-semibold text-gray-900">{project.name}</h3>
-            {project.description && (
-              <p className="text-sm text-gray-500 mt-1">{project.description}</p>
-            )}
-            <div className="mt-4 flex gap-4 text-sm text-gray-500">
-              <span>{project._count?.queues || 0} queues</span>
-              <span>{project._count?.workers || 0} workers</span>
-            </div>
-            <p className="text-xs text-gray-400 mt-2">
-              Created {new Date(project.createdAt).toLocaleDateString()}
-            </p>
-          </div>
-        ))}
-
-        {projects.length === 0 && (
-          <div className="col-span-full text-center py-12 text-gray-500">
-            No projects yet. Create one to get started.
+        {showForm && (
+          <Card className="mb-4">
+            <CardContent className="pt-5">
+              <form onSubmit={handleCreate} className="flex gap-2">
+                <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Project name" required />
+                <Button type="submit">Create</Button>
+              </form>
+            </CardContent>
+          </Card>
+        )}
+        {loading ? (
+          <TableSkeleton rows={3} />
+        ) : (
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+            {projects.map((p) => (
+              <button
+                key={p.id}
+                onClick={() => setProject({ id: p.id, name: p.name })}
+                className="card-surface p-5 text-left transition hover:border-[#3B82F6]/50"
+              >
+                <h3 className="font-semibold">{p.name}</h3>
+                {p.description && <p className="mt-1 text-xs text-[#A1A1AA]">{p.description}</p>}
+                <div className="mt-4 flex gap-4 text-xs text-[#A1A1AA]">
+                  <span>{p._count?.queues ?? 0} queues</span>
+                  <span>{p._count?.workers ?? 0} workers</span>
+                </div>
+              </button>
+            ))}
           </div>
         )}
-      </div>
-    </div>
+      </main>
+    </>
   );
 }

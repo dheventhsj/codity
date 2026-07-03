@@ -62,6 +62,8 @@ export function createQueueRoutes(controller: QueueController): Router {
   router.get('/', asyncHandler(controller.findAll));
 
   router.get('/:id', asyncHandler(controller.findById));
+  router.patch('/:id/pause', asyncHandler(controller.pause));
+  router.patch('/:id/resume', asyncHandler(controller.resume));
   router.post('/:id/pause', asyncHandler(controller.pause));
   router.post('/:id/resume', asyncHandler(controller.resume));
   router.get('/:id/stats', asyncHandler(controller.getStats));

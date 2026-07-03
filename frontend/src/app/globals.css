@@ -1,9 +1,53 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
+  :root {
+    --bg-primary: #0B0B0B;
+    --bg-secondary: #121212;
+    --bg-card: #171717;
+    --border: #262626;
+    --text-primary: #FFFFFF;
+    --text-secondary: #A1A1AA;
+    --accent-blue: #3B82F6;
+    --accent-green: #22C55E;
+    --accent-red: #EF4444;
+    --accent-warning: #F59E0B;
+  }
+
+  * {
+    @apply border-border;
+  }
+
   body {
-    @apply bg-gray-50 text-gray-900 antialiased;
+    @apply bg-[#0B0B0B] text-white antialiased;
+    font-family: 'Inter', system-ui, sans-serif;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: #121212;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: #262626;
+    border-radius: 3px;
+  }
+}
+
+@layer utilities {
+  .glass-border {
+    @apply border border-[#262626];
+  }
+
+  .card-surface {
+    @apply bg-[#171717] border border-[#262626] rounded-lg;
   }
 }

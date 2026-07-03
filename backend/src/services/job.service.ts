@@ -3,6 +3,8 @@ import { NotFoundError, ValidationError } from '../utils/errors';
 import { PaginationParams, buildPaginatedResponse, PaginatedResponse } from '../utils/pagination';
 import { FilterParams } from '../types';
 import { logger } from '../utils/logger';
+import { ProjectService } from './project.service';
+import { JobRepository } from '../repositories/job.repository';
 
 export interface CreateJobInput {
   queueId: string;
@@ -40,17 +42,22 @@ export interface JobResponse {
 }
 
 export class JobService {
-  constructor(private readonly prisma: PrismaClient) {}
+  private readonly projectService: ProjectService;
+  private readonly jobRepo: JobRepository;
+
+  constructor(private readonly prisma: PrismaClient) {
+    this.projectService = new ProjectService(prisma);
+    this.jobRepo = new JobRepository(prisma);
+  }
 
   async create(userId: string, input: CreateJobInput): Promise<JobResponse> {
     const queue = await this.prisma.queue.findUnique({
       where: { id: input.queueId },
-      include: { project: { select: { userId: true } } },
+      include: { project: { select: { id: true } } },
     });
 
-    if (!queue || queue.project.userId !== userId) {
-      throw new NotFoundError('Queue', input.queueId);
-    }
+    if (!queue) throw new NotFoundError('Queue', input.queueId);
+    await this.projectService.assertProjectAccess(userId, queue.project.id);
 
     if (queue.status === 'DRAINING') {
       throw new ValidationError('Queue is draining and not accepting new jobs');
@@ -94,53 +101,49 @@ export class JobService {
     filters: FilterParams,
     pagination: PaginationParams
   ): Promise<PaginatedResponse<JobResponse>> {
-    const where: Prisma.JobWhereInput = {
-      queue: { project: { userId } },
-      ...(filters.status && { status: filters.status as JobStatus }),
-      ...(filters.type && { type: filters.type as JobType }),
-      ...(filters.queueId && { queueId: filters.queueId }),
-      ...(filters.priority !== undefined && { priority: filters.priority }),
-    };
+    if (!filters.projectId) {
+      return buildPaginatedResponse([], 0, pagination);
+    }
 
-    const [jobs, total] = await Promise.all([
-      this.prisma.job.findMany({
-        where,
-        skip: pagination.skip,
-        take: pagination.limit,
-        orderBy: [{ priority: 'desc' }, { createdAt: 'desc' }],
-      }),
-      this.prisma.job.count({ where }),
-    ]);
+    await this.projectService.assertProjectAccess(userId, filters.projectId);
 
-    return buildPaginatedResponse(jobs as unknown as JobResponse[], total, pagination);
+    const result = await this.jobRepo.findMany({
+      where: {
+        queue: { projectId: filters.projectId },
+        ...(filters.status && { status: filters.status as JobStatus }),
+        ...(filters.type && { type: filters.type as JobType }),
+        ...(filters.queueId && { queueId: filters.queueId }),
+        ...(filters.priority !== undefined && { priority: filters.priority }),
+      },
+      skip: pagination.skip,
+      take: pagination.limit,
+      search: filters.search,
+    });
+
+    return buildPaginatedResponse(result.data as unknown as JobResponse[], result.total, pagination);
+  }
+
+  private async assertJobAccess(userId: string, jobId: string) {
+    const job = await this.prisma.job.findUnique({
+      where: { id: jobId },
+      include: { queue: { select: { projectId: true } } },
+    });
+    if (!job) throw new NotFoundError('Job', jobId);
+    await this.projectService.assertProjectAccess(userId, job.queue.projectId);
+    return job;
   }
 
   async findById(userId: string, jobId: string): Promise<JobResponse> {
-    const job = await this.prisma.job.findUnique({
-      where: { id: jobId },
-      include: {
-        queue: { include: { project: { select: { userId: true } } } },
-        executions: { orderBy: { attempt: 'desc' }, take: 10 },
-        logs: { orderBy: { timestamp: 'desc' }, take: 50 },
-      },
-    });
+    await this.assertJobAccess(userId, jobId);
 
-    if (!job || job.queue.project.userId !== userId) {
-      throw new NotFoundError('Job', jobId);
-    }
+    const job = await this.jobRepo.findById(jobId);
+    if (!job) throw new NotFoundError('Job', jobId);
 
     return job as unknown as JobResponse;
   }
 
   async retry(userId: string, jobId: string): Promise<JobResponse> {
-    const job = await this.prisma.job.findUnique({
-      where: { id: jobId },
-      include: { queue: { include: { project: { select: { userId: true } } } } },
-    });
-
-    if (!job || job.queue.project.userId !== userId) {
-      throw new NotFoundError('Job', jobId);
-    }
+    const job = await this.assertJobAccess(userId, jobId);
 
     if (!['FAILED', 'DEAD'].includes(job.status)) {
       throw new ValidationError('Only failed or dead jobs can be retried');
@@ -158,10 +161,7 @@ export class JobService {
       },
     });
 
-    // Remove from DLQ if present
-    await this.prisma.deadLetterQueue.deleteMany({
-      where: { jobId },
-    });
+    await this.prisma.deadLetterQueue.deleteMany({ where: { jobId } });
 
     logger.info('Job retried', { jobId });
 
@@ -169,14 +169,7 @@ export class JobService {
   }
 
   async cancel(userId: string, jobId: string): Promise<JobResponse> {
-    const job = await this.prisma.job.findUnique({
-      where: { id: jobId },
-      include: { queue: { include: { project: { select: { userId: true } } } } },
-    });
-
-    if (!job || job.queue.project.userId !== userId) {
-      throw new NotFoundError('Job', jobId);
-    }
+    const job = await this.assertJobAccess(userId, jobId);
 
     if (['COMPLETED', 'DEAD'].includes(job.status)) {
       throw new ValidationError('Cannot cancel a completed or dead job');
@@ -188,6 +181,35 @@ export class JobService {
     });
 
     return updated as unknown as JobResponse;
+  }
+
+  async getDlq(userId: string, projectId: string, pagination: PaginationParams) {
+    await this.projectService.assertProjectAccess(userId, projectId);
+
+    const where = { job: { queue: { projectId } }, resolvedAt: null };
+
+    const [data, total] = await Promise.all([
+      this.prisma.deadLetterQueue.findMany({
+        where,
+        skip: pagination.skip,
+        take: pagination.limit,
+        orderBy: { failedAt: 'desc' },
+        include: {
+          job: {
+            select: {
+              id: true,
+              name: true,
+              queueId: true,
+              attempts: true,
+              payload: true,
+            },
+          },
+        },
+      }),
+      this.prisma.deadLetterQueue.count({ where }),
+    ]);
+
+    return buildPaginatedResponse(data, total, pagination);
   }
 
   private inferJobType(input: CreateJobInput): JobType {

@@ -1,123 +1,142 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { apiClient, getToken } from '@/lib/api';
-import StatCard from '@/components/StatCard';
+import { Activity, CheckCircle2, Clock, ListTodo, Skull, Zap } from 'lucide-react';
+import { Header } from '@/components/layout/header';
+import { KpiCard } from '@/components/dashboard/kpi-card';
+import { ThroughputChart } from '@/components/charts/throughput-chart';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { TableSkeleton } from '@/components/ui/skeleton';
+import { apiClient } from '@/lib/api';
+import { useAppStore } from '@/stores/app-store';
+import { formatRelativeTime } from '@/lib/utils';
+import { subscribeToProject } from '@/lib/socket';
 
-interface DashboardStats {
-  jobs: { total: number; queued: number; running: number; completed: number; failed: number; dead: number };
-  workers: { total: number; online: number; busy: number };
-  queues: { total: number; active: number; paused: number };
-  throughput: { last24h: number; lastHour: number };
+interface Analytics {
+  summary: {
+    totalJobs: number;
+    queued: number;
+    running: number;
+    completed: number;
+    failed: number;
+    dead: number;
+    successRate: number;
+    avgDurationMs: number;
+  };
+  throughput: {
+    series: Array<{ timestamp: string; count: number }>;
+    jobsPerMinute: number;
+  };
+  recentJobs: Array<{ id: string; name: string; status: string; createdAt: string }>;
+  queues: Array<{ id: string; name: string; status: string; health: string; jobCount: number }>;
 }
 
 export default function DashboardPage() {
-  const [stats, setStats] = useState<DashboardStats | null>(null);
+  const { token, project } = useAppStore();
+  const [data, setData] = useState<Analytics | null>(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    async function fetchStats() {
-      try {
-        const token = getToken();
-        const projectId = localStorage.getItem('codity_project_id');
-        if (!projectId) {
-          setLoading(false);
-          return;
-        }
-
-        const res = await apiClient<DashboardStats>(`/stats?projectId=${projectId}`, { token: token || '' });
-        if (res.data) setStats(res.data);
-      } catch {
-        // Stats may not be available yet
-      } finally {
-        setLoading(false);
-      }
+  const fetchData = async () => {
+    if (!token || !project) {
+      setLoading(false);
+      return;
     }
-    fetchStats();
-  }, []);
+    try {
+      const res = await apiClient<Analytics>(`/analytics?projectId=${project.id}`, { token });
+      if (res.data) setData(res.data);
+    } catch {
+      /* empty */
+    } finally {
+      setLoading(false);
+    }
+  };
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600" />
-      </div>
-    );
-  }
+  useEffect(() => {
+    fetchData();
+  }, [token, project]);
 
-  if (!stats) {
-    return (
-      <div className="max-w-2xl">
-        <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
-        <p className="text-gray-500 mt-2">
-          Create a project first to see statistics. Go to the Projects page to get started.
-        </p>
-      </div>
-    );
-  }
+  useEffect(() => {
+    if (!token || !project) return;
+    return subscribeToProject(token, project.id, {
+      onMetricsUpdate: () => fetchData(),
+      onJobUpdate: () => fetchData(),
+    });
+  }, [token, project]);
 
   return (
-    <div>
-      <div className="mb-8">
-        <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
-        <p className="text-gray-500 mt-1">System overview and performance metrics</p>
-      </div>
+    <>
+      <Header title="Dashboard" description="Real-time overview of your job scheduling platform" />
+      <main className="flex-1 overflow-y-auto p-6">
+        {!project ? (
+          <Card>
+            <CardContent className="py-12 text-center text-sm text-[#A1A1AA]">
+              Select a project from the Projects page to view metrics.
+            </CardContent>
+          </Card>
+        ) : loading ? (
+          <TableSkeleton rows={4} />
+        ) : data ? (
+          <div className="space-y-6">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              <KpiCard title="Total Jobs" value={data.summary.totalJobs} icon={ListTodo} />
+              <KpiCard title="Running" value={data.summary.running} icon={Activity} variant="warning" />
+              <KpiCard title="Completed" value={data.summary.completed} icon={CheckCircle2} variant="success" />
+              <KpiCard title="Dead Letter" value={data.summary.dead} icon={Skull} variant="danger" />
+            </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        <StatCard title="Total Jobs" value={stats.jobs.total} color="blue" />
-        <StatCard title="Running" value={stats.jobs.running} color="yellow" />
-        <StatCard title="Completed" value={stats.jobs.completed} color="green" />
-        <StatCard title="Failed" value={stats.jobs.failed + stats.jobs.dead} color="red" />
-      </div>
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+              <Card className="lg:col-span-2">
+                <CardHeader>
+                  <CardTitle>Throughput (24h)</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <ThroughputChart data={data.throughput.series} />
+                </CardContent>
+              </Card>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-        <StatCard title="Workers Online" value={stats.workers.online} subtitle={`${stats.workers.busy} busy`} color="green" />
-        <StatCard title="Active Queues" value={stats.queues.active} subtitle={`${stats.queues.paused} paused`} color="purple" />
-        <StatCard title="Throughput (24h)" value={stats.throughput.last24h} subtitle={`${stats.throughput.lastHour} last hour`} color="blue" />
-      </div>
+              <Card>
+                <CardHeader>
+                  <CardTitle>Queue Health</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {data.queues.map((q) => (
+                    <div key={q.id} className="flex items-center justify-between rounded-md border border-[#262626] p-3">
+                      <div>
+                        <p className="text-sm font-medium">{q.name}</p>
+                        <p className="text-xs text-[#A1A1AA]">{q.jobCount} jobs</p>
+                      </div>
+                      <Badge status={q.health} />
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+            </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-white rounded-xl border border-gray-200 p-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">Job Status Distribution</h2>
-          <div className="space-y-3">
-            {Object.entries(stats.jobs).filter(([k]) => k !== 'total').map(([key, value]) => (
-              <div key={key} className="flex items-center justify-between">
-                <span className="text-sm text-gray-600 capitalize">{key}</span>
-                <div className="flex items-center gap-2">
-                  <div className="w-32 h-2 bg-gray-100 rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-primary-500 rounded-full"
-                      style={{ width: `${stats.jobs.total > 0 ? (value / stats.jobs.total) * 100 : 0}%` }}
-                    />
-                  </div>
-                  <span className="text-sm font-medium text-gray-900 w-8 text-right">{value}</span>
+            <Card>
+              <CardHeader>
+                <CardTitle>Recent Jobs</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="divide-y divide-[#262626]">
+                  {data.recentJobs.map((job) => (
+                    <div key={job.id} className="flex items-center justify-between py-3">
+                      <div className="flex items-center gap-3">
+                        <Zap className="h-4 w-4 text-[#52525B]" />
+                        <div>
+                          <p className="text-sm font-medium">{job.name}</p>
+                          <p className="text-xs text-[#A1A1AA]">{formatRelativeTime(job.createdAt)}</p>
+                        </div>
+                      </div>
+                      <Badge status={job.status} />
+                    </div>
+                  ))}
                 </div>
-              </div>
-            ))}
+              </CardContent>
+            </Card>
           </div>
-        </div>
-
-        <div className="bg-white rounded-xl border border-gray-200 p-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">System Health</h2>
-          <div className="space-y-4">
-            <div className="flex items-center justify-between p-3 bg-green-50 rounded-lg">
-              <span className="text-sm font-medium text-green-700">Workers Online</span>
-              <span className="text-lg font-bold text-green-700">{stats.workers.online}</span>
-            </div>
-            <div className="flex items-center justify-between p-3 bg-blue-50 rounded-lg">
-              <span className="text-sm font-medium text-blue-700">Queues Active</span>
-              <span className="text-lg font-bold text-blue-700">{stats.queues.active}</span>
-            </div>
-            <div className="flex items-center justify-between p-3 bg-yellow-50 rounded-lg">
-              <span className="text-sm font-medium text-yellow-700">Jobs Processing</span>
-              <span className="text-lg font-bold text-yellow-700">{stats.jobs.running}</span>
-            </div>
-            <div className="flex items-center justify-between p-3 bg-red-50 rounded-lg">
-              <span className="text-sm font-medium text-red-700">Dead Letter Queue</span>
-              <span className="text-lg font-bold text-red-700">{stats.jobs.dead}</span>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
+        ) : null}
+      </main>
+    </>
   );
 }

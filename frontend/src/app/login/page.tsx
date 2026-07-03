@@ -2,13 +2,21 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { apiClient, setToken } from '@/lib/api';
+import { motion } from 'framer-motion';
+import { Zap } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { apiClient } from '@/lib/api';
+import { useAppStore } from '@/stores/app-store';
 
 export default function LoginPage() {
   const router = useRouter();
+  const setAuth = useAppStore((s) => s.setAuth);
+  const setProject = useAppStore((s) => s.setProject);
   const [isRegister, setIsRegister] = useState(false);
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  const [email, setEmail] = useState('demo@codity.dev');
+  const [password, setPassword] = useState('password123');
   const [name, setName] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -21,100 +29,95 @@ export default function LoginPage() {
     try {
       const endpoint = isRegister ? '/auth/register' : '/auth/login';
       const body = isRegister ? { email, password, name } : { email, password };
+      const res = await apiClient<{
+        token: string;
+        user: { id: string; email: string; name: string };
+        organization?: { id: string; name: string; slug: string };
+        organizations?: Array<{ id: string; name: string; slug: string }>;
+      }>(endpoint, { method: 'POST', body });
 
-      const res = await apiClient<{ token: string }>(endpoint, {
-        method: 'POST',
-        body,
-      });
+      const data = res.data!;
+      const org = data.organization ?? data.organizations?.[0] ?? null;
+      setAuth(data.token, data.user, org);
 
-      if (res.data?.token) {
-        setToken(res.data.token);
-        router.push('/dashboard');
+      if (org) {
+        const projects = await apiClient<Array<{ id: string; name: string }>>(
+          `/projects?organizationId=${org.id}`,
+          { token: data.token }
+        );
+        const paginated = projects as unknown as { data: Array<{ id: string; name: string }> };
+        if (paginated.data?.[0]) {
+          setProject(paginated.data[0]);
+        }
       }
+
+      router.push('/dashboard');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'An error occurred');
+      setError(err instanceof Error ? err.message : 'Authentication failed');
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary-50 to-blue-100 px-4">
-      <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8">
-        <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-gray-900">Codity</h1>
-          <p className="text-gray-500 mt-2">Distributed Job Scheduler</p>
+    <div className="flex min-h-screen items-center justify-center bg-[#0B0B0B] p-4">
+      <motion.div
+        initial={{ opacity: 0, y: 16 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="w-full max-w-md"
+      >
+        <div className="mb-8 flex flex-col items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[#3B82F6]">
+            <Zap className="h-5 w-5 text-white" />
+          </div>
+          <div className="text-center">
+            <h1 className="text-xl font-semibold">Codity</h1>
+            <p className="text-sm text-[#A1A1AA]">Distributed Job Scheduler</p>
+          </div>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          {isRegister && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Name
-              </label>
-              <input
-                type="text"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none transition"
-                required
-              />
-            </div>
-          )}
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Email
-            </label>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none transition"
-              required
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Password
-            </label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none transition"
-              required
-              minLength={8}
-            />
-          </div>
-
-          {error && (
-            <div className="bg-red-50 text-red-600 text-sm p-3 rounded-lg">
-              {error}
-            </div>
-          )}
-
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full bg-primary-600 text-white py-2.5 rounded-lg font-medium hover:bg-primary-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {loading ? 'Loading...' : isRegister ? 'Create Account' : 'Sign In'}
-          </button>
-        </form>
-
-        <div className="mt-6 text-center">
-          <button
-            onClick={() => setIsRegister(!isRegister)}
-            className="text-sm text-primary-600 hover:text-primary-700"
-          >
-            {isRegister
-              ? 'Already have an account? Sign In'
-              : "Don't have an account? Register"}
-          </button>
-        </div>
-      </div>
+        <Card>
+          <CardHeader>
+            <CardTitle>{isRegister ? 'Create account' : 'Sign in'}</CardTitle>
+            <CardDescription>
+              {isRegister ? 'Start scheduling jobs at scale' : 'Access your job scheduling platform'}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form onSubmit={handleSubmit} className="space-y-4">
+              {isRegister && (
+                <div>
+                  <label className="mb-1.5 block text-xs font-medium text-[#A1A1AA]">Name</label>
+                  <Input value={name} onChange={(e) => setName(e.target.value)} required />
+                </div>
+              )}
+              <div>
+                <label className="mb-1.5 block text-xs font-medium text-[#A1A1AA]">Email</label>
+                <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-xs font-medium text-[#A1A1AA]">Password</label>
+                <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={8} />
+              </div>
+              {error && (
+                <p className="rounded-md border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-400">
+                  {error}
+                </p>
+              )}
+              <Button type="submit" className="w-full" disabled={loading}>
+                {loading ? 'Loading...' : isRegister ? 'Create account' : 'Sign in'}
+              </Button>
+            </form>
+            <button
+              type="button"
+              onClick={() => setIsRegister(!isRegister)}
+              className="mt-4 w-full text-center text-xs text-[#A1A1AA] hover:text-white"
+            >
+              {isRegister ? 'Already have an account? Sign in' : "Don't have an account? Register"}
+            </button>
+          </CardContent>
+        </Card>
+      </motion.div>
     </div>
   );
 }

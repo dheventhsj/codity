@@ -6,7 +6,6 @@ const prisma = new PrismaClient();
 async function main() {
   console.log('Seeding database...');
 
-  // Create demo user
   const password = await bcrypt.hash('password123', 12);
   const user = await prisma.user.upsert({
     where: { email: 'demo@codity.dev' },
@@ -18,20 +17,29 @@ async function main() {
     },
   });
 
-  console.log(`Created user: ${user.email}`);
-
-  // Create demo project
-  const project = await prisma.project.create({
-    data: {
-      name: 'Demo Project',
-      description: 'A demonstration project for the job scheduler',
-      userId: user.id,
+  const org = await prisma.organization.upsert({
+    where: { slug: 'codity-demo' },
+    update: {},
+    create: {
+      name: 'Codity Demo Org',
+      slug: 'codity-demo',
+      members: {
+        create: { userId: user.id, role: 'OWNER' },
+      },
     },
   });
 
-  console.log(`Created project: ${project.name}`);
+  const project = await prisma.project.upsert({
+    where: { id: '00000000-0000-0000-0000-000000000001' },
+    update: {},
+    create: {
+      id: '00000000-0000-0000-0000-000000000001',
+      name: 'Demo Project',
+      description: 'Production demo environment',
+      organizationId: org.id,
+    },
+  });
 
-  // Create retry policies
   const exponentialPolicy = await prisma.retryPolicy.create({
     data: {
       name: 'Exponential Default',
@@ -42,27 +50,13 @@ async function main() {
     },
   });
 
-  const fixedPolicy = await prisma.retryPolicy.create({
-    data: {
-      name: 'Fixed 5s',
-      strategy: 'FIXED',
-      maxRetries: 3,
-      baseDelay: 5000,
-      maxDelay: 5000,
-    },
-  });
-
-  console.log('Created retry policies');
-
-  // Create queues
   const emailQueue = await prisma.queue.create({
     data: {
       name: 'email-notifications',
       projectId: project.id,
-      priority: 5,
+      priority: 8,
       concurrency: 10,
       retryPolicyId: exponentialPolicy.id,
-      description: 'Email sending jobs',
     },
   });
 
@@ -70,64 +64,31 @@ async function main() {
     data: {
       name: 'data-processing',
       projectId: project.id,
-      priority: 3,
+      priority: 5,
       concurrency: 5,
-      retryPolicyId: fixedPolicy.id,
-      description: 'Heavy data processing jobs',
-    },
-  });
-
-  const webhookQueue = await prisma.queue.create({
-    data: {
-      name: 'webhooks',
-      projectId: project.id,
-      priority: 8,
-      concurrency: 20,
       retryPolicyId: exponentialPolicy.id,
-      description: 'Outgoing webhook deliveries',
     },
   });
 
-  console.log('Created queues');
-
-  // Create sample jobs
-  const jobNames = [
-    'send-welcome-email',
-    'send-password-reset',
-    'process-csv-upload',
-    'generate-report',
-    'deliver-webhook',
-    'sync-user-data',
-    'cleanup-expired-sessions',
-    'send-newsletter',
-  ];
-
-  for (let i = 0; i < 20; i++) {
-    const queue = [emailQueue, dataQueue, webhookQueue][i % 3];
+  for (let i = 0; i < 30; i++) {
     await prisma.job.create({
       data: {
-        queueId: queue.id,
-        name: jobNames[i % jobNames.length],
+        queueId: i % 2 === 0 ? emailQueue.id : dataQueue.id,
+        name: `job-${i + 1}`,
         type: 'IMMEDIATE',
-        payload: { userId: `user-${i}`, timestamp: new Date().toISOString() },
+        payload: { index: i },
         priority: Math.floor(Math.random() * 10),
-        maxAttempts: 3,
         status: 'QUEUED',
       },
     });
   }
 
-  console.log('Created 20 sample jobs');
-  console.log('\nSeed complete!');
-  console.log(`\nLogin credentials:\n  Email: demo@codity.dev\n  Password: password123`);
-  console.log(`\nProject ID: ${project.id}`);
+  console.log('Seed complete');
+  console.log('Login: demo@codity.dev / password123');
+  console.log('Organization ID:', org.id);
+  console.log('Project ID:', project.id);
 }
 
 main()
-  .catch((e) => {
-    console.error(e);
-    process.exit(1);
-  })
-  .finally(async () => {
-    await prisma.$disconnect();
-  });
+  .catch(console.error)
+  .finally(() => prisma.$disconnect());

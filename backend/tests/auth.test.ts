@@ -6,6 +6,12 @@ const mockPrisma = {
     findUnique: jest.fn(),
     create: jest.fn(),
   },
+  $transaction: jest.fn((fn: (tx: unknown) => Promise<unknown>) =>
+    fn({
+      organization: { create: jest.fn().mockResolvedValue({ id: 'org-1', name: 'Test Org', slug: 'test-org' }) },
+      organizationMember: { create: jest.fn().mockResolvedValue({}) },
+    })
+  ),
 } as unknown as PrismaClient;
 
 describe('AuthService', () => {

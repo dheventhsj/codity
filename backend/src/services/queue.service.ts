@@ -1,6 +1,7 @@
 import { PrismaClient, QueueStatus } from '@prisma/client';
 import { NotFoundError, ValidationError } from '../utils/errors';
 import { PaginationParams, buildPaginatedResponse, PaginatedResponse } from '../utils/pagination';
+import { ProjectService } from './project.service';
 
 export interface CreateQueueInput {
   name: string;
@@ -26,16 +27,14 @@ export interface QueueResponse {
 }
 
 export class QueueService {
-  constructor(private readonly prisma: PrismaClient) {}
+  private readonly projectService: ProjectService;
+
+  constructor(private readonly prisma: PrismaClient) {
+    this.projectService = new ProjectService(prisma);
+  }
 
   async create(userId: string, input: CreateQueueInput): Promise<QueueResponse> {
-    const project = await this.prisma.project.findFirst({
-      where: { id: input.projectId, userId },
-    });
-
-    if (!project) {
-      throw new NotFoundError('Project', input.projectId);
-    }
+    await this.projectService.assertProjectAccess(userId, input.projectId);
 
     if (input.retryPolicyId) {
       const policy = await this.prisma.retryPolicy.findUnique({
@@ -64,13 +63,7 @@ export class QueueService {
     projectId: string,
     pagination: PaginationParams
   ): Promise<PaginatedResponse<QueueResponse>> {
-    const project = await this.prisma.project.findFirst({
-      where: { id: projectId, userId },
-    });
-
-    if (!project) {
-      throw new NotFoundError('Project', projectId);
-    }
+    await this.projectService.assertProjectAccess(userId, projectId);
 
     const [queues, total] = await Promise.all([
       this.prisma.queue.findMany({
@@ -91,13 +84,12 @@ export class QueueService {
       where: { id: queueId },
       include: {
         _count: { select: { jobs: true } },
-        project: { select: { userId: true } },
+        project: { select: { organizationId: true } },
       },
     });
 
-    if (!queue || queue.project.userId !== userId) {
-      throw new NotFoundError('Queue', queueId);
-    }
+    if (!queue) throw new NotFoundError('Queue', queueId);
+    await this.projectService.assertProjectAccess(userId, queue.projectId);
 
     const { project: _, ...queueData } = queue as typeof queue & { project: unknown };
     return queueData as unknown as QueueResponse;

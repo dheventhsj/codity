@@ -14,9 +14,11 @@ export class JobController {
   findAll = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     const pagination = extractPagination(req);
     const filters: FilterParams = {
+      projectId: req.query.projectId ? String(req.query.projectId) : undefined,
       status: req.query.status as string | undefined,
       type: req.query.type as string | undefined,
       queueId: req.query.queueId as string | undefined,
+      search: req.query.search ? String(req.query.search) : undefined,
       priority: req.query.priority ? parseInt(String(req.query.priority)) : undefined,
     };
     const result = await this.jobService.findAll(req.user!.id, filters, pagination);
