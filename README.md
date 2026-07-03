@@ -142,8 +142,15 @@ npm test
 - Start: `npm start`
 
 ### Frontend (Vercel)
-- Set `NEXT_PUBLIC_API_URL` to your Render backend URL
-- Framework: Next.js (auto-detected)
+
+**Live URL:** https://djscodity.vercel.app
+
+1. Import the repo in Vercel and set **Root Directory** to `frontend`
+2. Add environment variable:
+   - `NEXT_PUBLIC_API_URL` = `https://your-api.onrender.com/api/v1`
+3. Deploy (or run `cd frontend && vercel deploy --prod`)
+
+Login will not work until `NEXT_PUBLIC_API_URL` points to a deployed backend.
 
 ### Database (Neon)
 - Create a Neon project

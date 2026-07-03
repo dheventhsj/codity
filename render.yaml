@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: codity-api
+    runtime: node
+    plan: free
+    rootDir: backend
+    buildCommand: npm install && npx prisma generate && npm run build
+    startCommand: npx prisma db push && npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_EXPIRES_IN
+        value: 7d
+      - key: CORS_ORIGIN
+        value: https://djscodity.vercel.app,http://localhost:3000
+      - key: DATABASE_URL
+        sync: false
+      - key: LOG_LEVEL
+        value: info
+    healthCheckPath: /health
