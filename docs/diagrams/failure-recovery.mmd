@@ -1,0 +1,26 @@
+flowchart LR
+    subgraph Failures
+        F1[Worker crash]
+        F2[Lock TTL expires]
+        F3[DB unavailable]
+        F4[Duplicate claim]
+    end
+
+    subgraph Detection
+        D1[Heartbeat stops]
+        D2[locked_until past now]
+        D3[Health check fails]
+        D4[SKIP LOCKED]
+    end
+
+    subgraph Recovery
+        R1[Stale detector releases jobs]
+        R2[Job re-claimable]
+        R3[API degraded / workers retry]
+        R4[Prevented at DB level]
+    end
+
+    F1 --> D1 --> R1
+    F2 --> D2 --> R2
+    F3 --> D3 --> R3
+    F4 --> D4 --> R4

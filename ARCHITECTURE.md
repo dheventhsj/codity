@@ -1,80 +1,44 @@
 # Architecture Document — Codity v2
 
+> **PDF export:** Diagrams below are embedded as images so they render correctly in PDF.  
+> Source files live in [`docs/diagrams/`](docs/diagrams/). Regenerate with `npm run diagrams` from the repo root.
+
 ## High-Level Architecture
 
-```mermaid
-flowchart TB
-    subgraph Client
-        FE[Next.js Dashboard]
-        Socket[Socket.IO Client]
-    end
+![High-level architecture diagram](docs/diagrams/high-level-architecture.png)
 
-    subgraph API Layer
-        Express[Express API Server]
-        WS[Socket.IO Server]
-        Auth[JWT + RBAC Middleware]
-    end
-
-    subgraph Worker Layer
-        WM[Worker Manager]
-        JC[Job Claimer - SKIP LOCKED]
-        JE[Job Executor]
-        HB[Heartbeat Service]
-        SD[Stale Detector]
-    end
-
-    subgraph Data
-        PG[(PostgreSQL / Neon)]
-    end
-
-    FE -->|REST| Express
-    Socket -->|WebSocket| WS
-    Express --> Auth
-    Express --> PG
-    WS --> PG
-    WM --> JC
-    JC --> PG
-    JE --> PG
-    HB --> PG
-    SD --> PG
-```
+| Layer | Components |
+|-------|------------|
+| **Client** | Next.js Dashboard, Socket.IO Client |
+| **API** | Express REST, Socket.IO Server, JWT + RBAC |
+| **Worker** | Job Claimer (SKIP LOCKED), Executor, Heartbeats, Stale Detector |
+| **Data** | PostgreSQL (Neon) |
 
 ## Job Claiming Sequence
 
-```mermaid
-sequenceDiagram
-    participant W as Worker
-    participant DB as PostgreSQL
-    participant J as Job Executor
+![Job claiming sequence diagram](docs/diagrams/job-claiming-sequence.png)
 
-    loop Every 5s
-        W->>DB: SELECT ... FOR UPDATE SKIP LOCKED
-        DB-->>W: Claimed job IDs
-        W->>DB: UPDATE status=CLAIMED, locked_until
-        W->>J: Execute concurrently
-        J->>DB: status=RUNNING
-        alt Success
-            J->>DB: status=COMPLETED
-        else Failure + retries left
-            J->>DB: status=RETRYING, scheduled_for
-        else Max retries
-            J->>DB: status=DEAD + DLQ entry
-        end
-        W->>DB: INSERT heartbeat
-    end
-```
+1. Worker polls every ~5 seconds
+2. Claims jobs atomically via `SELECT … FOR UPDATE SKIP LOCKED`
+3. Executes concurrently up to worker concurrency limit
+4. Updates status: COMPLETED, RETRYING, or DEAD (+ DLQ)
+5. Sends heartbeat after each poll cycle
 
 ## Failure Scenarios
+
+![Failure detection and recovery](docs/diagrams/failure-recovery.png)
 
 | Scenario | Detection | Recovery |
 |----------|-----------|----------|
 | Worker crash mid-job | Heartbeat stops | Stale detector marks OFFLINE, releases jobs |
-| Lock TTL expires | locked_until < now() | Job re-claimable by another worker |
+| Lock TTL expires | `locked_until < now()` | Job re-claimable by another worker |
 | DB unavailable | Health check fails | API returns degraded; workers retry poll |
 | Duplicate claim | SKIP LOCKED | Prevented at DB level |
-| Idempotent create | idempotency_key unique | Returns existing job |
+| Idempotent create | `idempotency_key` unique | Returns existing job |
 
 ## Scaling Strategy
+
+![Horizontal scaling strategy](docs/diagrams/scaling-strategy.png)
 
 - **API**: Stateless horizontal scaling behind load balancer
 - **Workers**: Add instances; each claims independently via SKIP LOCKED
@@ -84,7 +48,7 @@ sequenceDiagram
 ## Design Decisions
 
 ### Shared Database vs Message Broker
-We use PostgreSQL as the queue store for ACID guarantees, query flexibility, and operational simplicity. Trade-off: ~5-50ms claim latency vs ~1ms for Redis.
+We use PostgreSQL as the queue store for ACID guarantees, query flexibility, and operational simplicity. Trade-off: ~5–50ms claim latency vs ~1ms for Redis.
 
 ### Repository Pattern
 Prisma access is abstracted into repositories (`JobRepository`, `AuditRepository`) to decouple services from ORM details and enable testing.
@@ -107,21 +71,14 @@ Immutable append-only log for compliance and debugging, separate from job execut
 
 ## ER Diagram
 
-```mermaid
-erDiagram
-    User ||--o{ OrganizationMember : has
-    Organization ||--o{ OrganizationMember : has
-    Organization ||--o{ Project : contains
-    Project ||--o{ Queue : has
-    Project ||--o{ Worker : has
-    Project ||--o{ ScheduledJob : has
-    Queue ||--o{ Job : contains
-    Queue ||--o{ ScheduledJob : targets
-    Job ||--o{ JobExecution : has
-    Job ||--o{ JobLog : has
-    Job ||--o| DeadLetterQueue : may_have
-    Worker ||--o{ WorkerHeartbeat : sends
-    User ||--o{ AuditLog : performs
-    User ||--o{ Notification : receives
-    RetryPolicy ||--o{ Queue : configures
+![Entity-relationship diagram](docs/diagrams/er-diagram.png)
+
+## Regenerating Diagrams
+
+From the repository root:
+
+```bash
+npm run diagrams
 ```
+
+This uses [`@mermaid-js/mermaid-cli`](https://github.com/mermaid-js/mermaid-cli) to render all `.mmd` files in `docs/diagrams/` to PNG.

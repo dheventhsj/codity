@@ -1,0 +1,32 @@
+flowchart TB
+    LB[Load Balancer]
+
+    subgraph API Tier
+        API1[API Instance 1]
+        API2[API Instance 2]
+        API3[API Instance N]
+    end
+
+    subgraph Worker Tier
+        W1[Worker 1]
+        W2[Worker 2]
+        WN[Worker N]
+    end
+
+    subgraph Data Tier
+        PG[(PostgreSQL / Neon)]
+        POOL[PgBouncer Pool]
+        REPLICA[(Read Replica)]
+    end
+
+    LB --> API1
+    LB --> API2
+    LB --> API3
+    API1 --> POOL
+    API2 --> POOL
+    API3 --> POOL
+    W1 --> POOL
+    W2 --> POOL
+    WN --> POOL
+    POOL --> PG
+    PG --> REPLICA

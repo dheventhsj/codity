@@ -1,0 +1,16 @@
+erDiagram
+    User ||--o{ OrganizationMember : has
+    Organization ||--o{ OrganizationMember : has
+    Organization ||--o{ Project : contains
+    Project ||--o{ Queue : has
+    Project ||--o{ Worker : has
+    Project ||--o{ ScheduledJob : has
+    Queue ||--o{ Job : contains
+    Queue ||--o{ ScheduledJob : targets
+    Job ||--o{ JobExecution : has
+    Job ||--o{ JobLog : has
+    Job ||--o| DeadLetterQueue : may_have
+    Worker ||--o{ WorkerHeartbeat : sends
+    User ||--o{ AuditLog : performs
+    User ||--o{ Notification : receives
+    RetryPolicy ||--o{ Queue : configures

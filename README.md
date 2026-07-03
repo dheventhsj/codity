@@ -57,9 +57,15 @@ npm install
 
 ```bash
 cd backend
-npx prisma migrate dev --name init
+npx prisma db push
 npx prisma generate
+npm run prisma:seed
 ```
+
+This loads **demo data** for every dashboard page (jobs in all statuses, workers, DLQ entries, audit logs, analytics history, and more).
+
+**Demo login:** `demo@codity.dev` / `password123`  
+**Demo project ID:** `00000000-0000-0000-0000-000000000001`
 
 ### 3. Start Services
 

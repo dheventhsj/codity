@@ -1,0 +1,10 @@
+{
+  "name": "codity",
+  "private": true,
+  "scripts": {
+    "diagrams": "node scripts/generate-diagrams.mjs"
+  },
+  "devDependencies": {
+    "@mermaid-js/mermaid-cli": "^11.4.0"
+  }
+}

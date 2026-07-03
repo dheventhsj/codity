@@ -1,0 +1,20 @@
+sequenceDiagram
+    participant W as Worker
+    participant DB as PostgreSQL
+    participant J as Job Executor
+
+    loop Every 5s
+        W->>DB: SELECT ... FOR UPDATE SKIP LOCKED
+        DB-->>W: Claimed job IDs
+        W->>DB: UPDATE status=CLAIMED, locked_until
+        W->>J: Execute concurrently
+        J->>DB: status=RUNNING
+        alt Success
+            J->>DB: status=COMPLETED
+        else Failure + retries left
+            J->>DB: status=RETRYING, scheduled_for
+        else Max retries
+            J->>DB: status=DEAD + DLQ entry
+        end
+        W->>DB: INSERT heartbeat
+    end
